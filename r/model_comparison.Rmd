@@ -1,0 +1,140 @@
+---
+title: "model_comparison"
+author: "Quentin Auster"
+date: "2023-07-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r imports}
+library(tidyverse)
+library(caret)
+library(readxl)
+library(plotROC)
+library(pROC)
+library(verification)
+```
+
+```{r}
+preds <- read.csv("../output/logit_predictions.csv")
+
+```
+
+
+```{r Test Results}
+
+demo_roc <- roc(preds$GroundTruth, preds$Demo)
+artery_roc <- roc(preds$GroundTruth, preds$Artery)
+vein_roc <- roc(preds$GroundTruth, preds$Vein)
+all_roc <- roc(preds$GroundTruth, preds$All)
+
+roc_results <- list(
+  "Demo" = c(
+    auc(demo_roc), 
+    ci.auc(preds$GroundTruth, preds$Demo)
+    
+  ),
+  "Artery" = c(
+    auc(artery_roc), 
+    ci.auc(preds$GroundTruth, preds$Artery)
+  ),
+  "Vein" = c(
+    auc(vein_roc), 
+    ci.auc(preds$GroundTruth, preds$Vein)
+  ),
+  "All" = c(
+    auc(all_roc), 
+    ci.auc(preds$GroundTruth, preds$All)
+  )
+)
+roc_results_df <- as.data.frame(do.call(rbind, roc_results))
+colnames(roc_results_df) <- c("AUC", "ci_low", "ci_mid", "ci_high")
+
+roc_results_df$Model <- row.names(roc_results_df)
+
+roc_results_df$Legend <- paste0(
+  str_pad(str_trim(roc_results_df$Model), width = 9, side = 'right', pad = ' '),
+  "AUC: ",
+  format(round(roc_results_df$AUC, 2), nsmall = 2), 
+  " (", 
+  format(round(roc_results_df$ci_low, 2), nsmall = 2), 
+  "-", 
+  format(round(roc_results_df$ci_high, 2), nsmall = 2),
+  ")"
+) 
+
+write.csv(t(roc_results_df), file = "../output/auc_ci.csv")
+
+
+roc_results_df
+```
+
+```{r Cross-Validation DeLong Tests}
+models <- list(
+  "Demo" = demo_roc, 
+  "Artery" = artery_roc, 
+  "Vein" = vein_roc,
+  "All" = all_roc
+)
+delong_pvals_cv <- data.frame(
+  matrix(
+    NA, 
+    nrow = length(models), 
+    ncol = length(models)
+  )
+)
+rownames(delong_pvals_cv) <- names(models)
+colnames(delong_pvals_cv) <- names(models)
+
+for (i in 1:length(models)) {
+  for (j in 1:length(models)) {
+    model1 <- names(models)[i]
+    model2 <- names(models)[j]
+    delong_test = roc.test(
+      models[[model1]], 
+      models[[model2]],
+      method='delong',
+      alternative='two.sided'
+    )
+    delong_pvals_cv[i, j] <- delong_test$p.value
+  }
+}
+
+print(delong_pvals_cv)
+
+write.csv(delong_pvals_cv, file = "../output/delong_pvalues.csv")
+```
+
+
+```{r}
+gather(preds, key = "Model", value = "proba", -GroundTruth)
+
+```
+
+```{r}
+preds_long <- gather(preds, key = "Model", value = "proba", -GroundTruth)
+preds_long$Model <- factor(preds_long$Model)
+preds_long <- merge(preds_long, roc_results_df[, c("Model", "Legend")], sort = FALSE)
+preds_long
+```
+
+```{r}
+
+preds_long %>% 
+  ggplot(mapping = aes(m = proba, d = GroundTruth, color = Legend) ) +
+  geom_roc(n.cuts = 0) +
+  coord_equal() +
+  guides(color = guide_legend(title = "Model")) + 
+  style_roc(
+    minor.breaks = c(seq(0, 0.1, by = 0.025), seq(0.9, 1, by = 0.025)),
+    xlab = "False Positive Rate",
+    ylab = "True Positive Rate",
+    guide = TRUE,
+    theme = theme_grey
+  )
+ggsave("../figures/roc_plots.png")
+```
