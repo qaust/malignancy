@@ -20,7 +20,7 @@ library(verification)
 ```
 
 ```{r}
-preds <- read.csv("../output/logit_predictions.csv")
+preds <- read.csv("../output/logit_predictions_cv.csv")
 
 ```
 
@@ -30,6 +30,7 @@ preds <- read.csv("../output/logit_predictions.csv")
 demo_roc <- roc(preds$GroundTruth, preds$Demo)
 artery_roc <- roc(preds$GroundTruth, preds$Artery)
 vein_roc <- roc(preds$GroundTruth, preds$Vein)
+av_roc <- roc(preds$GroundTruth, preds$Vessels)
 all_roc <- roc(preds$GroundTruth, preds$All)
 
 roc_results <- list(
@@ -45,6 +46,10 @@ roc_results <- list(
   "Vein" = c(
     auc(vein_roc), 
     ci.auc(preds$GroundTruth, preds$Vein)
+  ),
+  "Vessels" = c(
+    auc(av_roc), 
+    ci.auc(preds$GroundTruth, preds$Vessels)
   ),
   "All" = c(
     auc(all_roc), 
@@ -78,6 +83,7 @@ models <- list(
   "Demo" = demo_roc, 
   "Artery" = artery_roc, 
   "Vein" = vein_roc,
+  "Vessels" = av_roc,
   "All" = all_roc
 )
 delong_pvals_cv <- data.frame(
@@ -117,7 +123,7 @@ gather(preds, key = "Model", value = "proba", -GroundTruth)
 
 ```{r}
 preds_long <- gather(preds, key = "Model", value = "proba", -GroundTruth)
-preds_long$Model <- factor(preds_long$Model)
+# preds_long$Model <- factor(preds_long$Model)
 preds_long <- merge(preds_long, roc_results_df[, c("Model", "Legend")], sort = FALSE)
 preds_long
 ```
