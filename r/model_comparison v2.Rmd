@@ -1,0 +1,255 @@
+---
+title: "model_comparison"
+author: "Quentin Auster"
+date: "2023-07-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r imports, include=FALSE}
+library(tidyverse)
+library(caret)
+library(readxl)
+library(plotROC)
+library(pROC)
+library(verification)
+library(glue)
+```
+
+```{r}
+preds <- read.csv("../output/logit_predictions_cv.csv")
+preds$Demo5 <- preds$Demo
+preds$Demo10 <- preds$Demo
+preds$Demo15 <- preds$Demo
+preds <- preds[, order(names(preds))]
+```
+
+```{r}
+
+models <- list()
+
+auc_df <- data.frame(
+  Model = character(), 
+  AUC = numeric(), 
+  CI_lower = numeric(), 
+  CI_mid = numeric(),
+  CI_upper = numeric(), 
+  stringsAsFactors=FALSE
+)
+
+
+for (col in colnames(preds)){
+  
+  print(col)
+  print(preds$col)
+  
+  if (col=='GroundTruth'){
+    next
+  }
+  # Generate ROC
+  temp_roc <- roc(preds$GroundTruth, preds[[col]])
+
+  # Calculate AUC and AUC Confidence Intervals
+  auc_val = auc(temp_roc)
+  ci_val = ci.auc(temp_roc)
+  auc_df = rbind(
+    auc_df, 
+    data.frame(
+      Model = col,
+      AUC = auc_val,
+      CI_lower = ci_val[1],
+      CI_mid = ci_val[2],
+      CI_upper = ci_val[3]
+    ))
+  
+  # Store ROC model
+  # We use these for the DeLong tests, so leave out duplicative Demo models
+  if (!(col %in% c('Demo5', 'Demo10', 'Demo15'))){
+    models[[col]] <- temp_roc
+  }
+}
+
+
+auc_df$Legend <- paste0(
+  str_pad(str_trim(auc_df$Model), width = 14, side = 'right', pad = ' '),
+  "AUC: ",
+  format(round(auc_df$AUC, 2), nsmall = 2), 
+  " (", 
+  format(round(auc_df$CI_lower, 2), nsmall = 2), 
+  "-", 
+  format(round(auc_df$CI_upper, 2), nsmall = 2),
+  ")"
+) 
+
+
+write.csv(auc_df, file = "../output/auc_ci.csv", row.names = FALSE)
+
+auc_df
+```
+
+```{r}
+delong_pvals_cv <- data.frame(
+  matrix(
+    NA, 
+    nrow = length(models), 
+    ncol = length(models)
+  )
+)
+rownames(delong_pvals_cv) <- names(models)
+colnames(delong_pvals_cv) <- names(models)
+
+for (i in 1:length(models)) {
+  for (j in 1:length(models)) {
+    model1 <- names(models)[i]
+    model2 <- names(models)[j]
+    delong_test = roc.test(
+      models[[model1]], 
+      models[[model2]],
+      method='delong',
+      alternative='two.sided'
+    )
+    delong_pvals_cv[i, j] <- delong_test$p.value
+  }
+}
+
+write.csv(delong_pvals_cv, file = "../output/delong_pvalues.csv", na = '')
+
+delong_pvals_cv
+
+```
+
+
+
+```{r}
+table(gather(preds, key = "Model", value = "proba", -GroundTruth)$Model)
+
+```
+
+
+```{r}
+
+model_map <- list(
+  'Demo5' =        c('Bandwidth=5',    'Demo'),
+  'Demo10' =       c('Bandwidth=10',   'Demo'),
+  'Demo15' =       c('Bandwidth=15',   'Demo'), 
+  'Demo' =         c('All Bandwidths', 'Demo'), 
+  'Artery5' =      c('Bandwidth=5',    'Artery'),
+  'Artery10' =     c('Bandwidth=10',   'Artery'), 
+  'Artery15' =     c('Bandwidth=15',   'Artery'),
+  'Artery' =       c('All Bandwidths', 'Artery'),
+  'Vein5' =        c('Bandwidth=5',    'Vein'),
+  'Vein10' =       c('Bandwidth=10',   'Vein'), 
+  'Vein15' =       c('Bandwidth=15',   'Vein'),
+  'Vein' =         c('All Bandwidths', 'Vein'),
+  'Vessel5' =      c('Bandwidth=5',    'Vessel'),
+  'Vessel10' =     c('Bandwidth=10',   'Vessel'), 
+  'Vessel15' =     c('Bandwidth=15',   'Vessel'),
+  'Vessel' =       c('All Bandwidths', 'Vessel'),
+  'Composite5' =   c('Bandwidth=5',    'Composite'),
+  'Composite10' =  c('Bandwidth=10',   'Composite'),
+  'Composite15' =  c('Bandwidth=15',   'Composite'),
+  'Composite' =    c('All Bandwidths', 'Composite')
+)
+bandwidths_df <- data.frame(t(as.data.frame(model_map)))
+colnames(bandwidths_df) <- c('Bandwidths', 'Category')
+bandwidths_df <- rownames_to_column(bandwidths_df, 'Model')
+
+color_map <- list(
+  "Demo" = "orange3",
+  "Artery" = "red2",
+  "Vein" = "blue2",
+  "Vessel" = "green2",
+  "Composite" = "black"
+)
+color_df <- data.frame(t(as.data.frame(color_map)))
+colnames(color_df) <- c('Color')
+color_df <- rownames_to_column(color_df, 'Category')
+
+# Convert from wide to long
+preds_long <- gather(preds, key = "Model", value = "proba", -GroundTruth)
+
+# Merge on legend text
+preds_long <- merge(preds_long, auc_df[, c("Model", "Legend")], 
+                    by = 'Model',sort = TRUE)
+
+# Merge on bandwidth and category text
+preds_long <- merge(preds_long, bandwidths_df, 
+                    by = 'Model', sort=FALSE)
+
+# Merge on colors (used for graphing)
+preds_long <- merge(preds_long, color_df, 
+                    by = 'Category', sort=FALSE)
+
+preds_long
+```
+
+
+```{r}
+
+
+p <- preds_long %>% 
+  ggplot(mapping = aes(m = proba, d = GroundTruth, color = Legend) ) +
+  geom_roc(n.cuts = 0) +
+  facet_wrap(~Bandwidths, ncol=2) + 
+  coord_equal() +
+  scale_color_manual(values = setNames(preds_long$Color, preds_long$Legend)) + 
+  guides(color = guide_legend(title = "Category")) + 
+  style_roc(
+    minor.breaks = c(seq(0, 0.1, by = 0.025), seq(0.9, 1, by = 0.025)),
+    xlab = "False Positive Rate",
+    ylab = "True Positive Rate",
+    guide = TRUE,
+    theme = theme_grey
+  ) + 
+  theme(
+    strip.text = element_text(size = 12)
+  )
+ggsave("../figures/roc_plots.png", plot = p, width = 10, height = 7)
+```
+
+
+
+```{r}
+
+# ROC plotting function
+plot_roc_curves <- function(data, fname){
+  data %>% 
+  ggplot(mapping = aes(m = proba, d = GroundTruth, color = Legend) ) +
+  geom_roc(n.cuts = 0) +
+  coord_equal() +
+  guides(color = guide_legend(title = "Model")) + 
+  style_roc(
+    minor.breaks = c(seq(0, 0.1, by = 0.025), seq(0.9, 1, by = 0.025)),
+    xlab = "False Positive Rate",
+    ylab = "True Positive Rate",
+    guide = TRUE,
+    theme = theme_grey
+  )
+  ggsave(glue("../figures/{fname}.png"))
+}
+
+# Define data subsets
+g5 <- c('Demo', 'Artery5', 'Vein5', 'Vessel5', 'Composite5')
+preds5 <- preds_long[preds_long$Model %in% g5, ]
+
+g10 <- c('Demo', 'Artery10', 'Vein10', 'Vessel10', 'Composite10')
+preds10 <- preds_long[preds_long$Model %in% g10, ]
+
+g15 <- c('Demo', 'Artery15', 'Vein15', 'Vessel15', 'Composite15')
+preds15 <- preds_long[preds_long$Model %in% g15, ]
+
+gAll <- c('Demo', 'Artery', 'Vein', 'Vessel', 'Composite')
+predsAll <- preds_long[preds_long$Model %in% gAll, ]
+
+# Plot curves
+plot_roc_curves(preds5, 'roc_5')
+plot_roc_curves(preds10, 'roc_10')
+plot_roc_curves(preds15, 'roc_15')
+plot_roc_curves(predsAll, 'roc_all')
+
+```
+
