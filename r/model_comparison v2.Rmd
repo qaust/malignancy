@@ -209,6 +209,7 @@ p <- preds_long %>%
     strip.text = element_text(size = 12)
   )
 ggsave("../figures/roc_plots.png", plot = p, width = 10, height = 7)
+p
 ```
 
 
